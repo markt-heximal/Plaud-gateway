@@ -19,7 +19,15 @@ export interface Config {
   callDelayMs: number;
   /** Loopback port for the one-time `auth` sign-in callback. */
   authPort: number;
+  /**
+   * Whether this copy polls Plaud. Off on a standby (ADR 4, Decision 6): only
+   * the selected host's state/plaud/sync.env turns it on.
+   */
+  syncEnabled: boolean;
 }
+
+/** Rest keys carry a fixed prefix so the inventory collector can find and strip them. */
+export const KEY_PREFIX = "pgk_";
 
 const WILDCARD_HOSTS = new Set(["0.0.0.0", "::", ""]);
 
@@ -34,7 +42,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   for (const pair of (env["PLAUD_REST_KEYS"] ?? "").split(",")) {
     const [name, key] = pair.split(":").map((s) => s.trim());
     if (!name || !key) continue;
-    if (key.length < 24) throw new Error(`PLAUD_REST_KEYS: the key for "${name}" is too short.`);
+    if (!key.startsWith(KEY_PREFIX)) {
+      throw new Error(`PLAUD_REST_KEYS: the key for "${name}" must start with ${KEY_PREFIX}.`);
+    }
+    if (key.length < KEY_PREFIX.length + 32) {
+      throw new Error(`PLAUD_REST_KEYS: the key for "${name}" is too short.`);
+    }
     restKeys.set(key, name);
   }
   const num = (name: string, fallback: number) => {
@@ -57,5 +70,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     sweepDays: num("PLAUD_SWEEP_DAYS", 30),
     callDelayMs: num("PLAUD_CALL_DELAY_MS", 250),
     authPort: num("PLAUD_AUTH_PORT", 3419),
+    syncEnabled: !/^(0|false|no|off)$/i.test(env["PLAUD_SYNC_ENABLED"] ?? "true"),
   };
 }

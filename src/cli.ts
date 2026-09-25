@@ -4,6 +4,7 @@
  *   sync     keeps the local store current (add --once for a single pass)
  *   rest     serves the store to my apps
  *   status   prints what the store holds, to compare with the Plaud app
+ *   health   exit 0 when sync is current (or switched off), 1 otherwise; for Docker
  */
 import { loadConfig } from "./config.ts";
 import { log } from "./log.ts";
@@ -21,6 +22,14 @@ const olderThan = (iso: string | null, ms: number) => !iso || Date.now() - Date.
 
 async function syncLoop(once: boolean) {
   const config = loadConfig();
+  if (!config.syncEnabled && !once) {
+    // A standby keeps the container up but never polls Plaud (ADR 4, Decision 6).
+    log.info("sync is switched off on this host (PLAUD_SYNC_ENABLED); idling");
+    await new Promise<void>((resolve) => {
+      for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => resolve());
+    });
+    return;
+  }
   const store = Store.open(config.stateDir);
   const tokens = new TokenSource(config.stateDir);
   const syncer = new Syncer(new PlaudMcp((force) => tokens.get(force)), store, {
@@ -82,6 +91,21 @@ function status() {
   store.close();
 }
 
+/** For Docker's healthcheck: a running sync has checked Plaud within three intervals. */
+function health() {
+  const config = loadConfig();
+  if (!config.syncEnabled) process.exit(0);
+  const store = Store.open(config.stateDir);
+  const last = store.getMeta("heartbeat");
+  const error = store.getMeta("last_error");
+  store.close();
+  const fresh = last !== null && Date.now() - Date.parse(last) < 3 * config.incrementalMinutes * 60_000;
+  if (!fresh || error) {
+    console.error(error || `no successful sync since ${last ?? "start"}`);
+    process.exit(1);
+  }
+}
+
 const [mode, ...rest] = process.argv.slice(2);
 switch (mode) {
   case "auth":
@@ -96,7 +120,10 @@ switch (mode) {
   case "status":
     status();
     break;
+  case "health":
+    health();
+    break;
   default:
-    console.error("usage: plaud-gateway auth | sync [--once] | rest | status");
+    console.error("usage: plaud-gateway auth | sync [--once] | rest | status | health");
     process.exit(2);
 }

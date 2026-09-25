@@ -8,7 +8,7 @@ import { Store } from "../src/store.ts";
 import { Syncer } from "../src/sync.ts";
 import { FakePlaud, sampleLibrary } from "./fake-plaud.ts";
 
-const KEY = "k".repeat(32);
+const KEY = `pgk_${"k".repeat(40)}`;
 let base = "";
 let close: () => void = () => {};
 
@@ -35,7 +35,7 @@ test("health needs no key and reports the store", async () => {
 
 test("everything else needs the right key", async () => {
   assert.equal((await get("/recordings", null)).status, 401);
-  assert.equal((await get("/recordings", "x".repeat(32))).status, 401);
+  assert.equal((await get("/recordings", `pgk_${"x".repeat(40)}`)).status, 401);
   assert.equal((await get("/recordings")).status, 200);
 });
 
@@ -109,6 +109,15 @@ test("the /plaud prefix used by the front door works", async () => {
   assert.equal((await get("/plaud/recordings/of_a1")).status, 200);
 });
 
-test("config refuses a wildcard bind", () => {
+test("config refuses a wildcard bind and keys without the pgk_ prefix", () => {
   assert.throws(() => loadConfig({ PLAUD_REST_HOST: "0.0.0.0" }), /specific address/);
+  assert.throws(() => loadConfig({ PLAUD_REST_KEYS: `me:${"a".repeat(48)}` }), /must start with pgk_/);
+  assert.throws(() => loadConfig({ PLAUD_REST_KEYS: "me:pgk_short" }), /too short/);
+});
+
+test("sync is on unless switched off", () => {
+  assert.equal(loadConfig({}).syncEnabled, true);
+  assert.equal(loadConfig({ PLAUD_SYNC_ENABLED: "false" }).syncEnabled, false);
+  assert.equal(loadConfig({ PLAUD_SYNC_ENABLED: "0" }).syncEnabled, false);
+  assert.equal(loadConfig({ PLAUD_SYNC_ENABLED: "true" }).syncEnabled, true);
 });
