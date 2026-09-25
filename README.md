@@ -14,6 +14,7 @@ One image with these modes:
 | `sync` | Keeps `plaud.db` current. It does a full walk weekly, checks for new recordings every 15 minutes, and runs a nightly edit sweep over the last 30 days. `--once` runs a single pass. |
 | `rest` | Serves the store on one address, with `X-API-Key` on everything but `/health`. |
 | `status` | Prints what the store holds, to compare with the Plaud app. |
+| `health` | Exit 0 when sync has checked Plaud within three intervals, or sync is switched off; for Docker's healthcheck. |
 
 No runtime dependencies: Node 22 (≥ 22.18) runs the TypeScript sources
 directly and has SQLite with full-text search built in. Audio is never stored.
@@ -69,7 +70,8 @@ browser** on a device signed in to Tailscale. coach4me's page, on
 | `PLAUD_STATE_DIR` | `./state` (image: `/state`) | `oauth.json`, `plaud.db`. Mount `~/stack/state/plaud`. |
 | `PLAUD_REST_HOST` | `127.0.0.1` | One address; wildcards are refused. |
 | `PLAUD_REST_PORT` | `3411` | |
-| `PLAUD_REST_KEYS` | none | `name:key,name:key`. Keys are at least 24 characters. |
+| `PLAUD_REST_KEYS` | none | `name:key,name:key`. Keys start with `pgk_` (so the inventory collector can strip them) followed by at least 32 characters: `pgk_$(openssl rand -hex 24)`. |
+| `PLAUD_SYNC_ENABLED` | `true` | `false` on a standby: the container idles instead of polling Plaud (ADR 4, Decision 6). |
 | `PLAUD_CORS_ORIGINS` | `https://*.lovable.app,http://localhost:8080` | |
 | `PLAUD_INCREMENTAL_MINUTES` | `15` | |
 | `PLAUD_SWEEP_DAYS` | `30` | |
@@ -109,7 +111,7 @@ open the link locally.
 Then serve it on loopback:
 
 ```bash
-PLAUD_REST_KEYS="me:$(openssl rand -hex 24)" npm start -- rest
+PLAUD_REST_KEYS="me:pgk_$(openssl rand -hex 24)" npm start -- rest
 curl -s 127.0.0.1:3411/health
 ```
 

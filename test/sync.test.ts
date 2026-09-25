@@ -23,6 +23,7 @@ test("the full walk pages through the whole library", async () => {
   assert.equal(c.withCleanedTranscript, 1);
   assert.equal(c.withRawTranscript, 3);
   assert.equal(c.withNotes, 3);
+  assert.ok(store.getMeta("heartbeat"), "every Plaud call records a heartbeat for the healthcheck");
 });
 
 test("the cleaned-up transcript is preferred and carries renames", async () => {

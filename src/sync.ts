@@ -36,6 +36,8 @@ export class Syncer {
 
   private async call(tool: string, args: Record<string, unknown>) {
     const out = await this.plaud.call(tool, args);
+    // A long first walk is healthy as long as Plaud keeps answering.
+    this.store.setMeta("heartbeat", new Date().toISOString());
     if (this.opts.callDelayMs) await sleep(this.opts.callDelayMs);
     return out;
   }
