@@ -29,8 +29,8 @@ const get = (path: string, key: string | null = KEY, headers: Record<string, str
 test("health needs no key and reports the store", async () => {
   const r = await get("/health", null);
   assert.equal(r.status, 200);
-  const j = (await r.json()) as { ok: boolean; recordings: number };
-  assert.deepEqual([j.ok, j.recordings], [true, 3]);
+  const j = (await r.json()) as { ok: boolean; recordings: number; syncEnabled: boolean; lastError: unknown };
+  assert.deepEqual([j.ok, j.recordings, j.syncEnabled, j.lastError], [true, 3, true, null]);
 });
 
 test("everything else needs the right key", async () => {

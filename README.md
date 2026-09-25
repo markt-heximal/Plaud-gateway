@@ -41,7 +41,7 @@ All JSON. Paths also work under `/plaud/…` for the front door.
 
 | Route | |
 |---|---|
-| `GET /health` | No key. Counts and last sync times. |
+| `GET /health` | No key. Counts, whether this copy syncs, the last sync times and heartbeat, and `lastError` (error text only). |
 | `GET /recordings?q=&from=YYYY-MM-DD&to=&limit=&offset=` | Newest first. `q` is a full-text search. |
 | `GET /recordings/{id}` | Metadata, available blocks, speakers. |
 | `GET /recordings/{id}/transcript?block=` | Cleaned-up by default; `block` is `transaction_polish`, `transaction`, `outline` or `mark_memo`. Each segment has the display `name`. |
