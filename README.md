@@ -48,6 +48,20 @@ All JSON. Paths also work under `/plaud/…` for the front door.
 | `PUT /recordings/{id}/speakers/{label}` | `{"name": "…"}`. A local fix for a speaker Plaud still calls "Speaker N". It never overrides a name set in Plaud, and it isn't sent to Plaud (stage 3). |
 | `GET /changes?since=` | New recordings, transcript and notes edits, title changes, and speaker fixes, in order. |
 
+## Who can reach it
+
+**Tailnet only, never public (ADR 7, Decision 5, option A).** The front door
+serves it on the tailnet with no Funnel route. My apps reach it **from the
+browser** on a device signed in to Tailscale. coach4me's page, on
+`*.lovable.app`, calls the gateway directly, and never through Lovable's cloud.
+- **CORS** allows `*.lovable.app` and localhost.
+- **Private Network Access.** Preflights from those origins get
+  `Access-Control-Allow-Private-Network: true`, which Chrome requires before a
+  public page can call a tailnet address.
+- **The key is entered per device**, in the app's settings, and stays in that
+  browser. It is never built into a published app.
+- **Off the tailnet**, the app falls back to its direct Plaud connection.
+
 ## Settings
 
 | Variable | Default | |

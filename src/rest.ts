@@ -185,6 +185,11 @@ export function createRestServer(store: Store, config: Config): Server {
       res.setHeader("Vary", "Origin");
       res.setHeader("Access-Control-Allow-Headers", "X-API-Key, Content-Type");
       res.setHeader("Access-Control-Allow-Methods", "GET, PUT, OPTIONS");
+      // coach4me's page (public origin) calls this over the tailnet (private
+      // address); Chrome's Private Network Access asks us to opt in explicitly.
+      if (req.headers["access-control-request-private-network"] === "true") {
+        res.setHeader("Access-Control-Allow-Private-Network", "true");
+      }
     }
     if (req.method === "OPTIONS") {
       res.writeHead(204).end();

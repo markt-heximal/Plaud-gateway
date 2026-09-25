@@ -87,6 +87,24 @@ test("CORS answers only the allowed origins", async () => {
   assert.ok(!originAllowed("https://a.b.lovable.app", ["https://*.lovable.app"]));
 });
 
+test("preflights from allowed pages may reach the private network, others may not", async () => {
+  const preflight = (origin: string) =>
+    fetch(`${base}/recordings`, {
+      method: "OPTIONS",
+      headers: {
+        Origin: origin,
+        "Access-Control-Request-Method": "GET",
+        "Access-Control-Request-Private-Network": "true",
+      },
+    });
+  const ok = await preflight("https://coach4me.lovable.app");
+  assert.equal(ok.status, 204);
+  assert.equal(ok.headers.get("access-control-allow-private-network"), "true");
+  const no = await preflight("https://evil.example");
+  assert.equal(no.headers.get("access-control-allow-private-network"), null);
+  assert.equal(no.headers.get("access-control-allow-origin"), null);
+});
+
 test("the /plaud prefix used by the front door works", async () => {
   assert.equal((await get("/plaud/recordings/of_a1")).status, 200);
 });
