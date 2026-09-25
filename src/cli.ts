@@ -3,6 +3,9 @@
  *   auth     one-time sign-in to Plaud; saves tokens to $PLAUD_STATE_DIR/oauth.json
  *   sync     keeps the local store current (add --once for a single pass)
  *   rest     serves the store to my apps
+ *   run      rest and sync in one process: the stack's mode, so one process owns
+ *            plaud.db (SQLite locking across containers on OrbStack's shared
+ *            folders is not something to rely on)
  *   status   prints what the store holds, to compare with the Plaud app
  *   health   exit 0 when sync is current (or switched off), 1 otherwise; for Docker
  */
@@ -117,6 +120,10 @@ switch (mode) {
   case "rest":
     serve();
     break;
+  case "run":
+    serve();
+    await syncLoop(false);
+    break;
   case "status":
     status();
     break;
@@ -124,6 +131,6 @@ switch (mode) {
     health();
     break;
   default:
-    console.error("usage: plaud-gateway auth | sync [--once] | rest | status | health");
+    console.error("usage: plaud-gateway auth | sync [--once] | rest | run | status | health");
     process.exit(2);
 }

@@ -13,6 +13,7 @@ One image with these modes:
 | `auth` | One-time Plaud sign-in (OAuth 2.1 with PKCE). Saves `oauth.json` (mode 600) in the state dir. |
 | `sync` | Keeps `plaud.db` current. It does a full walk weekly, checks for new recordings every 15 minutes, and runs a nightly edit sweep over the last 30 days. `--once` runs a single pass. |
 | `rest` | Serves the store on one address, with `X-API-Key` on everything but `/health`. |
+| `run` | `rest` and `sync` in one process. **The stack runs this**, so a single process owns `plaud.db`: SQLite's locking across two containers on OrbStack's shared folders is not something to rely on. |
 | `status` | Prints what the store holds, to compare with the Plaud app. |
 | `health` | Exit 0 when sync has checked Plaud within three intervals, or sync is switched off; for Docker's healthcheck. |
 
