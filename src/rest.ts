@@ -200,7 +200,17 @@ export function createRestServer(store: Store, config: Config): Server {
     const path = url.pathname.replace(/^\/plaud(?=\/)/, "").replace(/\/+$/, "") || "/";
 
     if (path === "/health" && req.method === "GET") {
-      send(200, { ok: true, ...store.counts(), fullWalkAt: store.getMeta("full_walk_at"), incrementalAt: store.getMeta("incremental_at"), sweepAt: store.getMeta("sweep_at") });
+      send(200, {
+        ok: true,
+        ...store.counts(),
+        syncEnabled: config.syncEnabled,
+        heartbeat: store.getMeta("heartbeat"),
+        fullWalkAt: store.getMeta("full_walk_at"),
+        incrementalAt: store.getMeta("incremental_at"),
+        sweepAt: store.getMeta("sweep_at"),
+        // Error text only (e.g. "PlaudAuthError: … Run `auth` again."), never recording content.
+        lastError: store.getMeta("last_error") || null,
+      });
       return;
     }
 
