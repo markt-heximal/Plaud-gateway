@@ -119,6 +119,13 @@ curl -s 127.0.0.1:3411/health
 Stage 2 adds the compose services, the source pin, the collector redaction and
 the tailnet route in `ai-factory-mini`.
 
+## Write-back (stage 3)
+
+Not built yet. First, the one-recording test in
+[`docs/writeback-test.md`](docs/writeback-test.md) checks whether a speaker
+rename through the open-source `plaud-api` reaches the cleaned-up transcript
+the Plaud app shows, and changes nothing else.
+
 ## Development
 
 ```bash
