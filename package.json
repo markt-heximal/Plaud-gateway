@@ -1,0 +1,17 @@
+{
+  "name": "plaud-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Syncs my Plaud library through Plaud's official MCP connector and serves it to my apps (ai-factory-mini ADR 7).",
+  "type": "module",
+  "engines": { "node": ">=22.18" },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/cli.ts",
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "typescript": "^5.9.0"
+  }
+}
