@@ -17,9 +17,15 @@ import type { NoteTab, Store } from "./store.ts";
 export interface SyncOptions {
   callDelayMs: number;
   pageSize?: number;
+  /** First wait after a 429; it doubles on each retry. */
+  rateLimitWaitMs?: number;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Plaud's 429 arrives as an HTTP status or inside a tool error. */
+const isRateLimited = (e: unknown) => /\b429\b|too many requests/i.test((e as Error).message ?? "");
+const RATE_LIMIT_RETRIES = 5;
 
 export class Syncer {
   private readonly plaud: PlaudSource;
@@ -34,8 +40,21 @@ export class Syncer {
     this.pageSize = opts.pageSize ?? 100;
   }
 
+  /** Every call here is a read, so a 429 is waited out and retried. */
   private async call(tool: string, args: Record<string, unknown>) {
-    const out = await this.plaud.call(tool, args);
+    let wait = this.opts.rateLimitWaitMs ?? 30_000;
+    let out: unknown;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        out = await this.plaud.call(tool, args);
+        break;
+      } catch (e) {
+        if (!isRateLimited(e) || attempt >= RATE_LIMIT_RETRIES) throw e;
+        log.warn("plaud rate limit, waiting", { tool, waitSec: wait / 1000 });
+        await sleep(wait);
+        wait *= 2;
+      }
+    }
     // A long first walk is healthy as long as Plaud keeps answering.
     this.store.setMeta("heartbeat", new Date().toISOString());
     if (this.opts.callDelayMs) await sleep(this.opts.callDelayMs);
@@ -98,7 +117,8 @@ export class Syncer {
         await this.fetchDetail(id);
       } catch (e) {
         log.warn("detail fetch failed", { id, error: (e as Error).message });
-        if ((e as Error).name === "PlaudAuthError") throw e;
+        // Still limited after the retries: stop, and pick up here next pass.
+        if ((e as Error).name === "PlaudAuthError" || isRateLimited(e)) throw e;
       }
     }
   }
@@ -130,9 +150,9 @@ export class Syncer {
           ...(cursor ? { cursor } : {}),
         });
       } catch (e) {
-        if ((e as Error).name === "PlaudAuthError") throw e;
-        // mark_memo and outline are often absent; a missing block is not an error.
-        if (page === 0) return null;
+        // mark_memo and outline are often absent. Only that is "no block":
+        // any other failure (a 429) must not pass for a recording without one.
+        if (page === 0 && /not (available|present)/i.test((e as Error).message)) return null;
         throw e;
       }
       const o = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};

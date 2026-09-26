@@ -126,3 +126,35 @@ test("note tabs come from note_list", () => {
     [{ title: "Summary", text: "Short." }],
   );
 });
+
+test("a 429 is waited out and retried, not recorded as a missing transcript", async () => {
+  const plaud = new FakePlaud(sampleLibrary());
+  const store = new Store(":memory:");
+  let limited = 3;
+  const real = plaud.call.bind(plaud);
+  plaud.call = async (tool, args) => {
+    if (tool === "get_transcript" && limited > 0) {
+      limited--;
+      throw new Error("Plaud get_transcript: Failed to get transcript: Error: API error: 429 Too Many Requests");
+    }
+    return real(tool, args);
+  };
+  await new Syncer(plaud, store, { callDelayMs: 0, rateLimitWaitMs: 1 }).fullWalk();
+  assert.equal(limited, 0);
+  assert.equal(store.counts().withRawTranscript, 3);
+});
+
+test("still limited after the retries: the pass stops and leaves the recording to fetch again", async () => {
+  const plaud = new FakePlaud(sampleLibrary());
+  const store = new Store(":memory:");
+  const real = plaud.call.bind(plaud);
+  let notes = 0;
+  plaud.call = async (tool, args) => {
+    if (tool === "get_note" && ++notes) throw new Error("Plaud MCP responded 429.");
+    return real(tool, args);
+  };
+  const syncer = new Syncer(plaud, store, { callDelayMs: 0, rateLimitWaitMs: 1 });
+  await assert.rejects(syncer.fullWalk(), /429/);
+  assert.equal(notes, 6, "one try and five retries, then stop");
+  assert.equal(store.missingDetailIds().length, 3);
+});
