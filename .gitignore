@@ -3,3 +3,5 @@ state/
 *.db
 *.db-*
 .env
+.claude-flow/
+.swarm/
