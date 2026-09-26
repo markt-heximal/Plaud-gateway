@@ -163,16 +163,47 @@ export async function interactiveAuth(config: Config): Promise<void> {
         res.writeHead(404).end();
         return;
       }
+      const reply = (status: number, text: string) => {
+        res.writeHead(status, { "Content-Type": "text/plain" });
+        res.end(text);
+      };
+      const error = u.searchParams.get("error");
+      if (error) {
+        // Plaud refused (e.g. access_denied): that is final.
+        const why = [error, u.searchParams.get("error_description")].filter(Boolean).join(": ");
+        reply(400, `Plaud did not grant access (${why}). Run auth again to retry.`);
+        clearTimeout(timer);
+        server.close();
+        reject(new Error(`Plaud did not grant access: ${why}`));
+        return;
+      }
       const got = u.searchParams.get("code");
-      const ok = got && u.searchParams.get("state") === state;
-      res.writeHead(ok ? 200 : 400, { "Content-Type": "text/plain" });
-      res.end(ok ? "Signed in to Plaud. You can close this tab." : "Sign-in failed. Try again.");
+      if (!got || u.searchParams.get("state") !== state) {
+        // A stray or stale redirect (an older link, a reload, a prefetch):
+        // say so and keep waiting for the real one.
+        const reason = !got ? "it carried no approval code" : "it came from a different sign-in link";
+        console.log(`Ignored a redirect to the callback: ${reason}. Still waiting.`);
+        reply(
+          400,
+          `This page isn't from the current sign-in link (${reason}). Use the newest link the gateway printed.`,
+        );
+        return;
+      }
+      reply(200, "Signed in to Plaud. You can close this tab.");
+      clearTimeout(timer);
       server.close();
-      if (ok) resolve(got);
-      else reject(new Error(u.searchParams.get("error") ?? "Plaud sign-in was not approved."));
+      resolve(got);
     });
+    // Give up after 15 minutes so a forgotten sign-in doesn't hold the port.
+    const timer = setTimeout(() => {
+      server.close();
+      reject(new Error("No approval within 15 minutes. Run auth again for a fresh link."));
+    }, 15 * 60_000);
     server.listen(config.authPort, "127.0.0.1", () => {
       console.log(`\nOpen this link in a browser on this machine and approve access:\n\n${url}\n`);
+      console.log(
+        `(From another machine: ssh -L ${config.authPort}:127.0.0.1:${config.authPort} <this host>, then open it there.)\n`,
+      );
     });
   });
 
