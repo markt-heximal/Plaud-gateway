@@ -34,6 +34,11 @@ directly and has SQLite with full-text search built in. Audio is never stored.
 - **Edits.** Nothing tells you a recording was edited, so the nightly sweep
   hashes each transcript and notes, and logs a change when the hash moves.
   Apps follow `/changes`.
+- **Line fixes.** Word fixes and lines moved to another speaker are kept on
+  the gateway, beside Plaud's text, never over it, and never sent to Plaud.
+  A fix applies only while Plaud's line still matches the one it replaced. If
+  Plaud changes that line, the fix stays but stops applying, and `/changes`
+  logs `line_fix_stale`. Search sees the fixed text.
 
 ## API (`rest`)
 
@@ -44,11 +49,14 @@ All JSON. Paths also work under `/plaud/…` for the front door.
 | `GET /health` | No key. Counts, whether this copy syncs, the last sync times and heartbeat, and `lastError` (error text only). |
 | `GET /recordings?q=&from=YYYY-MM-DD&to=&limit=&offset=` | Newest first. `q` is a full-text search. |
 | `GET /recordings/{id}` | Metadata, available blocks, speakers. |
-| `GET /recordings/{id}/transcript?block=` | Cleaned-up by default; `block` is `transaction_polish`, `transaction`, `outline` or `mark_memo`. Each segment has the display `name`. |
+| `GET /recordings/{id}/transcript?block=&fixes=` | Cleaned-up by default; `block` is `transaction_polish`, `transaction`, `outline` or `mark_memo`. Each segment has the display `name`. Line fixes are applied, and a fixed line carries `original` (Plaud's text and speaker); `fixes=off` serves Plaud's text only. `staleFixes` counts fixes on lines Plaud has since changed. |
 | `GET /recordings/{id}/notes` | Plaud's note tabs (summary, templates, Ask Plaud). |
 | `GET /recordings/{id}/speakers` | Label, name, and source: `plaud`, `fix` or none. |
 | `PUT /recordings/{id}/speakers/{label}` | `{"name": "…"}`. A local fix for a speaker Plaud still calls "Speaker N". It never overrides a name set in Plaud, and it isn't sent to Plaud (stage 3). |
-| `GET /changes?since=` | New recordings, transcript and notes edits, title changes, and speaker fixes, in order. |
+| `GET /recordings/{id}/lines` | The line fixes, each with `block`, `startMs`, `text`, `speaker`, `original` and `applies`. |
+| `PUT /recordings/{id}/lines/{startMs}?block=` | `{"text": "…", "speaker": "…"}`, either or both. Fixes the one line that starts at `startMs` in `block` (default: the served one). `speaker` must be a label already in that transcript. `null`, or Plaud's own value, clears a field. |
+| `DELETE /recordings/{id}/lines/{startMs}?block=` | Removes a line fix. |
+| `GET /changes?since=` | New recordings, transcript and notes edits, title changes, speaker and line fixes, and `line_fix_stale` when Plaud edits a fixed line, in order. |
 | `GET /keys` | Admin key only. Admin key names, and each device key's name, created and last-used time. Never a key. |
 | `POST /keys` | Admin key only. `{"name": "ipad"}`. Makes a device key and returns it once. |
 | `DELETE /keys/{name}` | Admin key only. Revokes a device key at once. |
