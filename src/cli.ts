@@ -10,6 +10,7 @@
  *   health   exit 0 when sync is current (or switched off), 1 otherwise; for Docker
  */
 import { loadConfig } from "./config.ts";
+import { KeyStore } from "./keys.ts";
 import { log } from "./log.ts";
 import { PlaudMcp } from "./mcp.ts";
 import { interactiveAuth, TokenSource } from "./oauth.ts";
@@ -65,9 +66,15 @@ async function syncLoop(once: boolean) {
 function serve() {
   const config = loadConfig();
   const store = Store.open(config.stateDir);
-  const server = createRestServer(store, config);
+  const keys = new KeyStore(config.stateDir, config.restKeys.values());
+  const server = createRestServer(store, config, keys);
   server.listen(config.restPort, config.restHost, () =>
-    log.info("rest listening", { host: config.restHost, port: config.restPort, callers: [...config.restKeys.values()] }),
+    log.info("rest listening", {
+      host: config.restHost,
+      port: config.restPort,
+      admins: [...config.restKeys.values()],
+      devices: keys.list().map((k) => k.name),
+    }),
   );
   for (const sig of ["SIGINT", "SIGTERM"] as const) {
     process.on(sig, () => server.close(() => store.close()));
