@@ -7,6 +7,21 @@ import { PLAUD_RESOURCE, PlaudAuthError } from "./oauth.ts";
 
 const PROTOCOL_VERSION = "2025-06-18";
 
+/**
+ * Plaud fences recording data against prompt injection: a preamble line, then
+ * `<untrusted-user-data-<id> source="…">`, the JSON, and `</untrusted-user-data-<id>>`.
+ * Returns what is inside the block, or the text as-is when there is none.
+ */
+export function unwrapUntrusted(text: string): string {
+  // The preamble names the tag too, so the opening tag must be a line of its own.
+  const open = /^<(untrusted-user-data-[A-Za-z0-9]+)(?:\s[^>]*)?>[ \t]*\r?$/m.exec(text);
+  if (!open) return text;
+  const start = open.index + open[0].length;
+  const end = text.indexOf(`</${open[1]}>`, start);
+  if (end < 0) throw new Error("Plaud sent an untrusted-data block with no closing tag.");
+  return text.slice(start, end).trim();
+}
+
 interface JsonRpcResponse {
   id?: number | string;
   result?: unknown;
@@ -118,7 +133,7 @@ export class PlaudMcp implements PlaudSource {
     }
     if (res.structuredContent !== undefined) return res.structuredContent;
     try {
-      return JSON.parse(text);
+      return JSON.parse(unwrapUntrusted(text));
     } catch {
       return text;
     }

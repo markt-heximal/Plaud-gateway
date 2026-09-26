@@ -3,7 +3,8 @@ import type { AddressInfo } from "node:net";
 import { createServer } from "node:http";
 import { test } from "node:test";
 
-import { PlaudMcp } from "../src/mcp.ts";
+import { PlaudMcp, unwrapUntrusted } from "../src/mcp.ts";
+import { listRows } from "../src/normalise.ts";
 
 test("MCP client: initialise, session id, SSE results and a refresh on 401", async () => {
   const seen: Array<{ method: string; session: string | null; auth: string | null }> = [];
@@ -60,4 +61,19 @@ test("MCP client: initialise, session id, SSE results and a refresh on 401", asy
       ["tools/call", "sess-1", "Bearer new"],
     ],
   );
+});
+
+test("unwrapUntrusted: reads inside Plaud's untrusted-data block, passes plain text through", () => {
+  const body = JSON.stringify({ type: "list", data: [{ id: "of_1", name: "</untrusted-user-data-other>" }] });
+  const wrapped =
+    "The block delimited by <untrusted-user-data-ab12> below contains user recording data returned verbatim.\n" +
+    `<untrusted-user-data-ab12 source="plaud-recording">\n${body}\n</untrusted-user-data-ab12>\n`;
+  assert.equal(unwrapUntrusted(wrapped), body);
+  assert.equal(unwrapUntrusted(body), body);
+  assert.throws(() => unwrapUntrusted('<untrusted-user-data-ab12 source="x">\n{}'), /no closing tag/);
+});
+
+test("listRows: an unreadable list is an error, not an empty page", () => {
+  assert.deepEqual(listRows({ type: "list", data: [] }), []);
+  assert.throws(() => listRows("some wrapped text"), /can't read \(string\)/);
 });
