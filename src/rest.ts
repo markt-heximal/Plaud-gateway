@@ -81,6 +81,18 @@ export function buildRoutes(store: Store): Array<[string, RegExp, Handler]> {
     if (!rec) throw new HttpError(404, "No such recording.");
     return rec;
   };
+  /** A line is its block (default: the preferred one) and its start time in ms. */
+  const lineTarget = (params: string[], url: URL) => {
+    const id = params[0]!;
+    need(id);
+    const asked = url.searchParams.get("block");
+    if (asked && !(BLOCKS as readonly string[]).includes(asked)) {
+      throw new HttpError(400, `block is one of ${BLOCKS.join(", ")}.`);
+    }
+    const block = (asked as Block | null) ?? store.preferredTranscript(id)?.block;
+    if (!block) throw new HttpError(404, "No transcript for this recording yet.");
+    return { id, block, startMs: Number(params[1]) };
+  };
   return [
     [
       "GET",
@@ -126,11 +138,14 @@ export function buildRoutes(store: Store): Array<[string, RegExp, Handler]> {
           ? { block: asked as Block, segments: store.getBlock(id, asked as Block) }
           : store.preferredTranscript(id);
         if (!t?.segments) throw new HttpError(404, "No transcript for this recording yet.");
+        // fixes=off serves Plaud's text as synced, without line fixes.
+        const segments = url.searchParams.get("fixes") === "off" ? t.segments : store.withFixes(id, t.block, t.segments);
         const names = new Map(store.speakers(id).map((s) => [s.label, s.name]));
         return {
           id,
           block: t.block,
-          segments: t.segments.map((s) => ({ ...s, name: names.get(s.speaker) ?? s.speaker })),
+          segments: segments.map((s) => ({ ...s, name: names.get(s.speaker) ?? s.speaker })),
+          staleFixes: store.lineFixes(id).filter((f) => f.block === t.block && !f.applies).length,
         };
       },
     ],
@@ -167,6 +182,59 @@ export function buildRoutes(store: Store): Array<[string, RegExp, Handler]> {
         store.setSpeakerFix(id, label, name || null);
         log.info("speaker fix saved locally", { id, label, caller, cleared: !name });
         return { id, speakers: store.speakers(id) };
+      },
+    ],
+    [
+      "GET",
+      /^\/recordings\/([\w-]+)\/lines$/,
+      ({ params }) => {
+        const id = params[0]!;
+        need(id);
+        return { id, fixes: store.lineFixes(id) };
+      },
+    ],
+    [
+      "PUT",
+      /^\/recordings\/([\w-]+)\/lines\/(\d+)$/,
+      async ({ params, req, url, caller }) => {
+        const { id, block, startMs } = lineTarget(params, url);
+        const body = (await readJson(req)) as { text?: unknown; speaker?: unknown };
+        const field = (v: unknown, max: number, what: string) => {
+          if (v === undefined || v === null) return v;
+          if (typeof v !== "string") throw new HttpError(400, `${what} is a string or null.`);
+          return v.trim().slice(0, max) || null;
+        };
+        const text = field(body.text, 5000, "text");
+        const speaker = field(body.speaker, 80, "speaker");
+        if (text === undefined && speaker === undefined) throw new HttpError(400, "Send text, speaker or both.");
+        const segments = store.getBlock(id, block) ?? [];
+        // A line moves to someone already in this transcript; name new people through /speakers.
+        if (speaker && !segments.some((s) => s.speaker === speaker)) {
+          throw new HttpError(400, "speaker must be a speaker label already in this transcript.");
+        }
+        try {
+          store.setLineFix(id, block, startMs, {
+            ...(text !== undefined ? { text } : {}),
+            ...(speaker !== undefined ? { speaker } : {}),
+          });
+        } catch (e) {
+          const msg = (e as Error).message;
+          if (msg === "no such line") throw new HttpError(404, "No line starts at that time in this block.");
+          if (msg === "ambiguous line") throw new HttpError(409, "More than one line starts at that time.");
+          throw e;
+        }
+        log.info("line fix saved locally", { id, block, startMs, caller });
+        return { id, fixes: store.lineFixes(id) };
+      },
+    ],
+    [
+      "DELETE",
+      /^\/recordings\/([\w-]+)\/lines\/(\d+)$/,
+      ({ params, url, caller }) => {
+        const { id, block, startMs } = lineTarget(params, url);
+        if (!store.deleteLineFix(id, block, startMs)) throw new HttpError(404, "No fix on that line.");
+        log.info("line fix removed", { id, block, startMs, caller });
+        return { id, fixes: store.lineFixes(id) };
       },
     ],
     [
