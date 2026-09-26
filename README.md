@@ -49,6 +49,16 @@ All JSON. Paths also work under `/plaud/…` for the front door.
 | `GET /recordings/{id}/speakers` | Label, name, and source: `plaud`, `fix` or none. |
 | `PUT /recordings/{id}/speakers/{label}` | `{"name": "…"}`. A local fix for a speaker Plaud still calls "Speaker N". It never overrides a name set in Plaud, and it isn't sent to Plaud (stage 3). |
 | `GET /changes?since=` | New recordings, transcript and notes edits, title changes, and speaker fixes, in order. |
+| `GET /keys` | Admin key only. Admin key names, and each device key's name, created and last-used time. Never a key. |
+| `POST /keys` | Admin key only. `{"name": "ipad"}`. Makes a device key and returns it once. |
+| `DELETE /keys/{name}` | Admin key only. Revokes a device key at once. |
+
+**Keys.** Keys in `PLAUD_REST_KEYS` are *admin* keys. An admin makes and
+revokes *device* keys through `/keys`, for example from the dashboard. Device
+keys read everything but can't manage keys. They are kept in
+`keys.json` (mode 600) in the state dir as SHA-256 hashes, so the file holds no
+usable key. A new key works at once, with no restart. To end an admin key,
+remove it from `rest.env` and restart.
 
 ## Who can reach it
 
@@ -68,10 +78,10 @@ browser** on a device signed in to Tailscale. coach4me's page, on
 
 | Variable | Default | |
 |---|---|---|
-| `PLAUD_STATE_DIR` | `./state` (image: `/state`) | `oauth.json`, `plaud.db`. Mount `~/stack/state/plaud`. |
+| `PLAUD_STATE_DIR` | `./state` (image: `/state`) | `oauth.json`, `plaud.db`, `keys.json`. Mount `~/stack/state/plaud`. |
 | `PLAUD_REST_HOST` | `127.0.0.1` | One address; wildcards are refused. |
 | `PLAUD_REST_PORT` | `3411` | |
-| `PLAUD_REST_KEYS` | none | `name:key,name:key`. Keys start with `pgk_` (so the inventory collector can strip them) followed by at least 32 characters: `pgk_$(openssl rand -hex 24)`. |
+| `PLAUD_REST_KEYS` | none | The admin keys: `name:key,name:key`. Keys start with `pgk_` (so the inventory collector can strip them) followed by at least 32 characters: `pgk_$(openssl rand -hex 24)`. |
 | `PLAUD_SYNC_ENABLED` | `true` | `false` on a standby: the container idles instead of polling Plaud (ADR 4, Decision 6). |
 | `PLAUD_CORS_ORIGINS` | `https://*.lovable.app,http://localhost:8080` | |
 | `PLAUD_INCREMENTAL_MINUTES` | `15` | |

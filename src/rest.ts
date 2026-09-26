@@ -2,12 +2,17 @@
  * A small read API over the local store (ADR 7, Decision 4). Every route but
  * /health needs X-API-Key; CORS is limited to the configured origins. It
  * binds one address and never serves audio.
+ *
+ * Two kinds of key: admin keys from PLAUD_REST_KEYS, and device keys that an
+ * admin makes and revokes through /keys (keys.ts). Both read everything; only
+ * admin keys manage keys.
  */
 import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { createServer } from "node:http";
 
 import type { Config } from "./config.ts";
+import { KeyError, KeyStore } from "./keys.ts";
 import { log } from "./log.ts";
 import type { Block } from "./normalise.ts";
 import { BLOCKS } from "./normalise.ts";
@@ -18,6 +23,7 @@ type Handler = (p: {
   url: URL;
   params: string[];
   caller: string;
+  admin: boolean;
 }) => Promise<unknown> | unknown;
 
 class HttpError extends Error {
@@ -39,14 +45,19 @@ export function originAllowed(origin: string, patterns: string[]): boolean {
   });
 }
 
-function keyCaller(provided: string | undefined, keys: Map<string, string>): string | null {
+function keyCaller(
+  provided: string | undefined,
+  admins: Map<string, string>,
+  devices: KeyStore,
+): { name: string; admin: boolean } | null {
   if (!provided) return null;
   const a = Buffer.from(provided);
-  for (const [key, name] of keys) {
+  for (const [key, name] of admins) {
     const b = Buffer.from(key);
-    if (a.length === b.length && timingSafeEqual(a, b)) return name;
+    if (a.length === b.length && timingSafeEqual(a, b)) return { name, admin: true };
   }
-  return null;
+  const name = devices.match(provided);
+  return name ? { name, admin: false } : null;
 }
 
 async function readJson(req: IncomingMessage): Promise<unknown> {
@@ -170,9 +181,52 @@ export function buildRoutes(store: Store): Array<[string, RegExp, Handler]> {
   ];
 }
 
-export function createRestServer(store: Store, config: Config): Server {
-  const routes = buildRoutes(store);
-  if (config.restKeys.size === 0) log.warn("PLAUD_REST_KEYS is empty: every call except /health is refused");
+/** Key management: admin keys only. A new key is in the POST reply and nowhere else. */
+export function keyRoutes(keys: KeyStore, admins: Iterable<string>): Array<[string, RegExp, Handler]> {
+  const adminOnly = (admin: boolean) => {
+    if (!admin) throw new HttpError(403, "Only an admin key can manage keys.");
+  };
+  return [
+    [
+      "GET",
+      /^\/keys$/,
+      ({ admin }) => {
+        adminOnly(admin);
+        return { admins: [...admins], keys: keys.list() };
+      },
+    ],
+    [
+      "POST",
+      /^\/keys$/,
+      async ({ req, admin, caller }) => {
+        adminOnly(admin);
+        const body = (await readJson(req)) as { name?: unknown };
+        const made = keys.create(typeof body.name === "string" ? body.name.trim() : "");
+        log.info("key created", { name: made.name, by: caller });
+        return made;
+      },
+    ],
+    [
+      "DELETE",
+      /^\/keys\/([^/]+)$/,
+      ({ params, admin, caller }) => {
+        adminOnly(admin);
+        const name = decodeURIComponent(params[0]!);
+        keys.revoke(name);
+        log.info("key revoked", { name, by: caller });
+        return { revoked: name };
+      },
+    ],
+  ];
+}
+
+export function createRestServer(
+  store: Store,
+  config: Config,
+  keys = new KeyStore(null, config.restKeys.values()),
+): Server {
+  const routes = [...buildRoutes(store), ...keyRoutes(keys, config.restKeys.values())];
+  if (config.restKeys.size === 0) log.warn("PLAUD_REST_KEYS is empty: no admin key, and no one can manage keys");
 
   return createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const send = (status: number, body: unknown) => {
@@ -184,7 +238,7 @@ export function createRestServer(store: Store, config: Config): Server {
       res.setHeader("Access-Control-Allow-Origin", origin);
       res.setHeader("Vary", "Origin");
       res.setHeader("Access-Control-Allow-Headers", "X-API-Key, Content-Type");
-      res.setHeader("Access-Control-Allow-Methods", "GET, PUT, OPTIONS");
+      res.setHeader("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS");
       // coach4me's page (public origin) calls this over the tailnet (private
       // address); Chrome's Private Network Access asks us to opt in explicitly.
       if (req.headers["access-control-request-private-network"] === "true") {
@@ -214,8 +268,8 @@ export function createRestServer(store: Store, config: Config): Server {
       return;
     }
 
-    const caller = keyCaller(req.headers["x-api-key"] as string | undefined, config.restKeys);
-    if (!caller) {
+    const who = keyCaller(req.headers["x-api-key"] as string | undefined, config.restKeys, keys);
+    if (!who) {
       send(401, { error: "Missing or wrong X-API-Key." });
       return;
     }
@@ -223,9 +277,9 @@ export function createRestServer(store: Store, config: Config): Server {
       const m = re.exec(path);
       if (!m || method !== req.method) continue;
       try {
-        send(200, await handler({ req, url, params: m.slice(1), caller }));
+        send(200, await handler({ req, url, params: m.slice(1), caller: who.name, admin: who.admin }));
       } catch (e) {
-        if (e instanceof HttpError) send(e.status, { error: e.message });
+        if (e instanceof HttpError || e instanceof KeyError) send(e.status, { error: e.message });
         else {
           log.error("request failed", { path, error: (e as Error).message });
           send(500, { error: "Internal error." });
