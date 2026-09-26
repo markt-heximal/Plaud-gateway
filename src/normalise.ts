@@ -67,12 +67,16 @@ export function normaliseRecording(row: Record<string, unknown>): Recording | nu
   };
 }
 
-/** The rows of a list_files response (browse or filtered). */
+/**
+ * The rows of a list_files response (browse or filtered). Anything else is an
+ * error: reading it as an empty page would end the walk and report 0 recordings.
+ */
 export function listRows(raw: unknown): Array<Record<string, unknown>> {
   if (raw && typeof raw === "object" && Array.isArray((raw as { data?: unknown }).data)) {
     return (raw as { data: Array<Record<string, unknown>> }).data;
   }
-  return [];
+  // No reply content in the message: it can reach /health, which needs no key.
+  throw new Error(`Plaud list_files sent a reply the gateway can't read (${typeof raw}).`);
 }
 
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
