@@ -1,6 +1,7 @@
 /**
  * The local copy of the library: one SQLite file in the state dir. Faithful to
- * Plaud (ADR 7, Decision 8); the only thing of mine in it is speaker fixes.
+ * Plaud (ADR 7, Decision 8); the only things of mine in it are speaker fixes
+ * and line fixes, kept apart from Plaud's own text.
  */
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -44,6 +45,19 @@ CREATE TABLE IF NOT EXISTS speaker_fixes (
   updated_at TEXT NOT NULL,
   PRIMARY KEY (recording_id, label)
 );
+-- A fix to one line: new words and/or another speaker. It holds the line it
+-- replaced, and applies only while Plaud's line still matches it.
+CREATE TABLE IF NOT EXISTS line_fixes (
+  recording_id TEXT NOT NULL REFERENCES recordings (id) ON DELETE CASCADE,
+  block TEXT NOT NULL,
+  start_ms INTEGER NOT NULL,
+  original_text TEXT NOT NULL,
+  original_speaker TEXT NOT NULL,
+  text TEXT,
+  speaker TEXT,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (recording_id, block, start_ms)
+);
 CREATE TABLE IF NOT EXISTS changes (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
   recording_id TEXT NOT NULL,
@@ -68,6 +82,20 @@ export interface SpeakerView {
   source: "plaud" | "fix" | null;
   turns: number;
 }
+
+export interface LineFix {
+  block: Block;
+  startMs: number;
+  text: string | null;
+  speaker: string | null;
+  original: { text: string; speaker: string };
+  updatedAt: string;
+  /** False once Plaud's line no longer matches `original`: the fix is kept but not applied. */
+  applies: boolean;
+}
+
+/** A served line: Plaud's, or with a fix applied (then `original` is Plaud's). */
+export type FixedSegment = Segment & { original?: { text: string; speaker: string } };
 
 export interface Change {
   seq: number;
@@ -239,7 +267,11 @@ export class Store {
            hash = excluded.hash, fetched_at = excluded.fetched_at`,
       )
       .run(id, block, JSON.stringify(segments), hash, now());
-    if (old) this.change(id, "transcript", block);
+    if (old) {
+      this.change(id, "transcript", block);
+      const stale = this.lineFixes(id).filter((f) => f.block === block && !f.applies).length;
+      if (stale) this.change(id, "line_fix_stale", `${block}: ${stale}`);
+    }
     this.reindex(id);
     return true;
   }
@@ -307,7 +339,7 @@ export class Store {
 
   /** Speakers in the preferred transcript. A name set in Plaud wins over a local fix. */
   speakers(id: string): SpeakerView[] {
-    const t = this.preferredTranscript(id);
+    const t = this.fixedTranscript(id);
     if (!t) return [];
     const fixes = new Map(
       (this.db.prepare("SELECT label, name FROM speaker_fixes WHERE recording_id = ?").all(id) as Row[]).map((r) => [
@@ -322,6 +354,91 @@ export class Store {
       const fix = fixes.get(label);
       return fix ? { label, name: fix, source: "fix", turns: n } : { label, name: label, source: null, turns: n };
     });
+  }
+
+  /* -------- line fixes -------- */
+
+  lineFixes(id: string): LineFix[] {
+    const rows = this.db
+      .prepare("SELECT * FROM line_fixes WHERE recording_id = ? ORDER BY block, start_ms")
+      .all(id) as Row[];
+    const blocks = new Map<string, Segment[]>();
+    return rows.map((r) => {
+      const block = String(r["block"]) as Block;
+      if (!blocks.has(block)) blocks.set(block, this.getBlock(id, block) ?? []);
+      const f = {
+        block,
+        startMs: Number(r["start_ms"]),
+        text: (r["text"] as string | null) ?? null,
+        speaker: (r["speaker"] as string | null) ?? null,
+        original: { text: String(r["original_text"]), speaker: String(r["original_speaker"]) },
+        updatedAt: String(r["updated_at"]),
+        applies: false,
+      };
+      f.applies = blocks.get(block)!.some((s) => matches(s, f));
+      return f;
+    });
+  }
+
+  /**
+   * Saves or clears a fix on the one line of `block` that starts at `startMs`.
+   * `undefined` keeps a field; null clears it. A stale fix is replaced, not merged.
+   */
+  setLineFix(id: string, block: Block, startMs: number, edit: { text?: string | null; speaker?: string | null }) {
+    const line = (this.getBlock(id, block) ?? []).filter((s) => s.startMs === startMs);
+    if (line.length !== 1) throw new Error(line.length ? "ambiguous line" : "no such line");
+    const seg = line[0]!;
+    const old = this.lineFixes(id).find((f) => f.block === block && f.startMs === startMs && f.applies);
+    const pick = (v: string | null | undefined, kept: string | null, plaud: string) => {
+      const next = v === undefined ? kept : v;
+      return next && next !== plaud ? next : null;
+    };
+    const text = pick(edit.text, old?.text ?? null, seg.text);
+    const speaker = pick(edit.speaker, old?.speaker ?? null, seg.speaker);
+    if (text === null && speaker === null) {
+      this.db
+        .prepare("DELETE FROM line_fixes WHERE recording_id = ? AND block = ? AND start_ms = ?")
+        .run(id, block, startMs);
+    } else {
+      this.db
+        .prepare(
+          `INSERT INTO line_fixes (recording_id, block, start_ms, original_text, original_speaker, text, speaker, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (recording_id, block, start_ms) DO UPDATE SET original_text = excluded.original_text,
+             original_speaker = excluded.original_speaker, text = excluded.text, speaker = excluded.speaker,
+             updated_at = excluded.updated_at`,
+        )
+        .run(id, block, startMs, seg.text, seg.speaker, text, speaker, now());
+    }
+    this.change(id, "line_fix", `${block}@${startMs}`);
+    this.reindex(id);
+  }
+
+  deleteLineFix(id: string, block: Block, startMs: number): boolean {
+    const r = this.db
+      .prepare("DELETE FROM line_fixes WHERE recording_id = ? AND block = ? AND start_ms = ?")
+      .run(id, block, startMs);
+    if (!r.changes) return false;
+    this.change(id, "line_fix", `${block}@${startMs}`);
+    this.reindex(id);
+    return true;
+  }
+
+  /** A block with its line fixes applied. Lines Plaud has since changed keep Plaud's text. */
+  withFixes(id: string, block: Block, segments: Segment[]): FixedSegment[] {
+    const fixes = this.lineFixes(id).filter((f) => f.block === block && f.applies);
+    if (!fixes.length) return segments;
+    return segments.map((s) => {
+      const f = fixes.find((x) => matches(s, x));
+      if (!f) return s;
+      return { ...s, text: f.text ?? s.text, speaker: f.speaker ?? s.speaker, original: f.original };
+    });
+  }
+
+  /** The preferred transcript with line fixes applied: what speakers and search see. */
+  fixedTranscript(id: string): { block: Block; segments: FixedSegment[] } | null {
+    const t = this.preferredTranscript(id);
+    return t ? { block: t.block, segments: this.withFixes(id, t.block, t.segments) } : null;
   }
 
   /* -------- changes -------- */
@@ -343,7 +460,7 @@ export class Store {
   private reindex(id: string) {
     const rec = this.db.prepare("SELECT name FROM recordings WHERE id = ?").get(id) as Row | undefined;
     if (!rec) return;
-    const t = this.preferredTranscript(id);
+    const t = this.fixedTranscript(id);
     const notes = this.getNotes(id) ?? [];
     this.db.prepare("DELETE FROM search WHERE recording_id = ?").run(id);
     this.db
@@ -356,6 +473,9 @@ export class Store {
       );
   }
 }
+
+const matches = (s: Segment, f: Pick<LineFix, "startMs" | "original">) =>
+  s.startMs === f.startMs && s.text === f.original.text && s.speaker === f.original.speaker;
 
 function toRecording(r: Row): Recording {
   return {
