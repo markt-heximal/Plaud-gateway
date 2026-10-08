@@ -158,3 +158,27 @@ test("still limited after the retries: the pass stops and leaves the recording t
   assert.equal(notes, 6, "one try and five retries, then stop");
   assert.equal(store.missingDetailIds().length, 3);
 });
+
+test("a recording not transcribed yet is skipped, not a failed pass, and fetched once it is", async () => {
+  const plaud = new FakePlaud(sampleLibrary());
+  const store = new Store(":memory:");
+  const pending = plaud.library[0]!.id;
+  let transcribed = false;
+  const real = plaud.call.bind(plaud);
+  plaud.call = async (tool, args) => {
+    if (tool === "get_transcript" && args["file_id"] === pending && !transcribed) {
+      throw new Error("Plaud get_transcript: Failed to get transcript: Error: API error: 404 Not Found");
+    }
+    return real(tool, args);
+  };
+  const syncer = new Syncer(plaud, store, { callDelayMs: 0 });
+  await syncer.fullWalk();
+  await syncer.sweep(10_000);
+  assert.deepEqual(store.missingDetailIds(), [pending]);
+  assert.equal(store.counts().withRawTranscript, 2);
+
+  transcribed = true;
+  await syncer.incremental();
+  assert.deepEqual(store.missingDetailIds(), []);
+  assert.equal(store.counts().withRawTranscript, 3);
+});
