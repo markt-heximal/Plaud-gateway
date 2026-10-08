@@ -126,10 +126,18 @@ export class Syncer {
   /** Fetches every transcript block and the notes for one recording. Returns true if anything changed. */
   async fetchDetail(id: string): Promise<boolean> {
     let changed = false;
+    let transcribed = false;
     for (const block of BLOCKS) {
       const segments = await this.readBlock(id, block);
       if (segments === null) continue;
+      if (block === "transaction") transcribed = true;
       if (this.store.putBlock(id, block, segments, contentHash(segments))) changed = true;
+    }
+    // Not transcribed in Plaud yet: leave its notes unread, so it stays
+    // missing and is fetched again next pass rather than failing this one.
+    if (!transcribed) {
+      log.info("no transcript yet, will fetch again", { id });
+      return changed;
     }
     const notes = noteTabs(await this.call("get_note", { file_id: id }));
     if (this.store.putNotes(id, notes, contentHash(notes))) changed = true;
@@ -150,9 +158,10 @@ export class Syncer {
           ...(cursor ? { cursor } : {}),
         });
       } catch (e) {
-        // mark_memo and outline are often absent. Only that is "no block":
-        // any other failure (a 429) must not pass for a recording without one.
-        if (page === 0 && /not (available|present)/i.test((e as Error).message)) return null;
+        // mark_memo and outline are often absent, and an untranscribed
+        // recording answers 404. Only those are "no block": any other
+        // failure (a 429) must not pass for a recording without one.
+        if (page === 0 && /not (available|present)|\b404\b/i.test((e as Error).message)) return null;
         throw e;
       }
       const o = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
